@@ -1,0 +1,380 @@
+---
+title: "Figure 2E and Supplemental Figure 1M - Duong et al Immunity 2025"
+output: html_notebook
+author: "Charles Tran"
+date: "Sept 13, 2024"
+---
+
+# Environment Setup
+## Load libraries
+```{r}
+library(readxl)
+library(writexl)
+library(dplyr)
+library(ggplot2)
+library(rstatix)
+library(ggpubr)
+library(survival)
+library(survminer)
+library(survivalAnalysis)
+library(stringr)
+library(babelgene)
+library(gridExtra)
+library(svMisc)
+library(grid) # for forestploter
+library(forestploter)
+```
+
+## Set custom colors for plotting
+```{r}
+# custom colors for plotting response
+response_colors <- c('#d7191c','#fdae61','#abdda4','#2b83ba')
+names(response_colors) <- c("CR", "PR", "SD", "PD")
+response_colors2 <- c('#fdae61', '#2b83ba')
+```
+
+## Define functions (BoxPlot, PFS, OS curves)
+```{r}
+BoxPlotORR <- function(gene.or.sig.vector, hp) {
+  # boxplots for ORR
+  ig.plot.list <- list()
+  gs <- gene.or.sig.vector
+  hp <- hp # horizontal boxplots
+  
+  if (hp == T) {
+    tpm_annotated_scores.temp <- tpm_annotated_scores
+    tpm_annotated_scores.temp$ORR_CRPR_SDPD <- factor(tpm_annotated_scores.temp$ORR_CRPR_SDPD, levels = c("SDPD", "CRPR"))
+  }
+  
+  for (v in 1:length(gs)) {
+    sig.name <- gs[v]
+    sig.name.var <- sym(sig.name)
+    
+    sig.name.hl <- paste0(sig.name, ".hl", sep="")
+    
+    # custom expression needed for t_test
+    test.expr <- rlang::expr(!! sig.name.var ~ ORR_CRPR_SDPD)
+    
+    # generate stats for plot
+    stat.temp <- tpm_annotated_scores %>% dplyr::select(PATNUM, {{sig.name}}, ORR_CRPR_SDPD) %>% t_test(formula = eval(test.expr)) %>% add_significance("p") %>% add_xy_position(x = "ORR_CRPR_SDPD", fun = "max")
+    
+    if (hp == T) {
+      ig.plot.list[[v]] <- ggplot(tpm_annotated_scores.temp, aes(x=ORR_CRPR_SDPD, y=!!ensym(sig.name))) + 
+        geom_boxplot(aes(fill=ORR_CRPR_SDPD), alpha = 0.5, outlier.shape=NA) + 
+        geom_point(aes(fill=ORR_CRPR_SDPD), color="black", position = position_jitterdodge(jitter.width=0.1, dodge.width=0.7), pch = 21) + 
+        scale_fill_manual(values = rev(response_colors2)) + 
+        scale_color_manual(values = rev(response_colors2)) + 
+        theme_bw(base_size = 16) +
+        theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), plot.title = element_text(hjust = 0.5), legend.position = "none", axis.title.x = element_text(face="italic"), axis.title.y = element_blank()) + 
+        labs(x=sig.name) +
+        scale_y_continuous(expand=c(0,1)) +
+        stat_pvalue_manual(stat.temp, hide.ns=F, tip.length=0, label = "{p}", coord.flip = T) + coord_flip()
+      
+    } else {
+      ig.plot.list[[v]] <- ggplot(tpm_annotated_scores, aes(x=ORR_CRPR_SDPD, y=!!ensym(sig.name))) + 
+        geom_boxplot(aes(fill=ORR_CRPR_SDPD), alpha = 0.5, outlier.shape=NA) + 
+        geom_point(aes(fill=ORR_CRPR_SDPD), color="black", position = position_jitterdodge(jitter.width=0.1, dodge.width=0.7), pch = 21) + 
+        scale_fill_manual(values = response_colors2) + 
+        scale_color_manual(values = response_colors2) + 
+        theme_bw(base_size = 16) +
+        theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), plot.title = element_text(hjust = 0.5), legend.position = "none", axis.title.x = element_blank(), axis.title.y = element_text(face="italic")) + 
+        labs(y=sig.name) +
+        scale_y_continuous(expand=c(0,1)) +
+        stat_pvalue_manual(stat.temp, hide.ns=F, tip.length=0, label = "{p.signif} (p = {p})")
+    }
+  }
+  
+  # generate plots in a single grid
+  if (hp == T) {
+    plot.arranged <- do.call("grid.arrange", c(ig.plot.list, ncol = 1))
+  } else {
+  plot.arranged <- do.call("grid.arrange", c(ig.plot.list, ncol = length(gs)))
+  }
+  return(plot.arranged)
+}
+
+
+# PFS
+PFSbySig <- function(input.sig) {
+  
+  grid.draw.ggsurvplot <- function(x){
+    survminer:::print.ggsurvplot(x, newpage = FALSE)
+  }
+  
+  PFS.plot.list <- list()
+  PFS.survfit.list <- list()
+  gs <- input.sig
+  
+  for (c in 1:length(gs)) {
+    sig.name <- gs[c]
+    sig.name.var <- paste0("ARM_", sig.name)
+    
+    PFS.plot.list[[c]] <- ggsurvplot(
+      fit = surv_fit(as.formula(paste0("Surv(PFS_MONTHS, PFS_CENSOR) ~ ", sig.name.var)), data = tpm_annotated_scores),
+      xlab = "Months", 
+      ylab = "PFS",
+      legend.title = paste(sig.name, "Score"),
+      legend.labs = km.labels, # dynamically generated depending on treatment group(s)
+      surv.median.line = "hv",
+      palette = "npg",
+      risk.table = T,
+      pval = T,
+      conf.int = F,
+      break.time.by = 3,
+      risk.table.y.text.col = T,
+      tables.theme = theme_cleantable(),
+      tables.height = 0.2,
+      tables.y.text = FALSE) 
+  }
+  
+  # calculate number of rows needed for plot
+  adj.row <- ceiling(length(gs) / 4)
+  PFS.all.sig <- arrange_ggsurvplots(PFS.plot.list, print = TRUE, ncol = ifelse(length(gs) < 4, length(gs), 4), nrow = adj.row)
+  return(PFS.all.sig)
+}
+
+# OS
+OSbySig <- function(input.sig) {
+  
+  grid.draw.ggsurvplot <- function(x){
+    survminer:::print.ggsurvplot(x, newpage = FALSE)
+  }
+  
+  OS.plot.list <- list()
+  gs <- input.sig
+  
+  for (d in 1:length(gs)) {
+    sig.name <- gs[d]
+    sig.name.var <- paste0("ARM_", sig.name)
+    
+    OS.plot.list[[d]] <- ggsurvplot(
+      fit = surv_fit(as.formula(paste0("Surv(OS_MONTHS, OS_CENSOR) ~ ", sig.name.var)), data = tpm_annotated_scores),
+      xlab = "Months", 
+      xlim = c(0, 36),
+      ylab = "OS",
+      legend.title = paste(sig.name),
+      legend.labs = km.labels,
+      surv.median.line = "hv",
+      palette = "npg",
+      risk.table = T,
+      pval = T,
+      pval.size = 8,
+      conf.int = F,
+      break.time.by = 3,
+      risk.table.y.text.col = T,
+      tables.theme = theme_cleantable(),
+      tables.height = 0.2,
+      tables.y.text = FALSE)
+  }
+  
+  # calculate number of rows needed for plot
+  adj.row <- ceiling(length(gs) / 4)
+  OS.all.sig <- arrange_ggsurvplots(OS.plot.list, print = TRUE, ncol = ifelse(length(gs) < 4, length(gs), 4), nrow = adj.row)
+  return(OS.all.sig)
+}
+```
+
+
+# Load data
+```{r}
+# CITYSCAPE source data: # CITYSCAPE source data: https://ega-archive.org/studies/EGAS50000000251
+tpm_annotated <- readRDS("CITYSCAPE_tpm_annotated.rds")
+```
+
+
+# Gene signatures
+## Convert mouse Fcgr1+ cDC1 signature to human 
+```{r}
+# murine signature genes
+fcgr1.cdc1.sig <- c("Irf8", "Batf3", "Ms4a7", "Mafb", "C3ar1", "Ms4a4a", "Clec4a3", "Fcgr1", "Capg", "Cybb", 
+                    "Clec4a2", "Ms4a6d", "Ctsd", "Clec4a1", "C1qc", "Trem2", "Ctsl", "C1qb", "Cebpb", "Csf1r",
+                    "Sirpa", "C1qa", "Fcgr4", "Fcer1g", "Lst1", "Pla2g7", "Selenop")
+
+# use babelgene to convert murine genes to human orthologs
+genes.temp <- orthologs(genes = fcgr1.cdc1.sig, species = "mouse", human = F) %>% arrange(factor(symbol, levels = fcgr1.cdc1.sig))
+genes.temp <- genes.temp %>% dplyr::select(human_symbol, symbol)
+
+# some query human genes may map to multiple orthologs - remove any duplicates
+genes.temp <- genes.temp[!duplicated(genes.temp$human_symbol),]
+
+# remove missing genes not found in the Villani et al DC scRNAseq dataset (for querying later)
+fcgr1.cdc1.human <- genes.temp %>% pull(human_symbol)
+missing.genes <- c("CTSV", "SELENOP") #CTSV and SELENOP not found in villani.seurat 
+fcgr1.cdc1.human <- setdiff(fcgr1.cdc1.human, missing.genes)
+
+# final human gene list should be: "IRF8"   "BATF3"  "MS4A7"  "MAFB"   "C3AR1"  "MS4A4A" "CLEC4A" "FCGR1A" "CAPG"   
+# "CYBB"   "MS4A6A" "CTSD"   "C1QC"   "TREM2"  "C1QB"   "CEBPB"  "CSF1R"  "SIRPA"  "C1QA" 
+# "FCGR3A" "FCER1G" "LST1" "PLA2G7"
+```
+
+
+## Calculate composite gene score (average) with FCGR1 cDC1 signature
+```{r}
+# get metadata layers
+tpm_meta <- tpm_annotated[, 1:180]
+
+# create list of signatures (a list of just one signature here)
+sig.list <- list()
+sig.list[[1]] <- fcgr1.cdc1.human
+
+final_sig_names <- c("FCGR_DC")
+names(sig.list) <- final_sig_names
+
+# add gene signatures from clusters
+for (i in 1:length(sig.list)) {
+  gene.sig <- sig.list[[i]]
+  sig.name <- names(sig.list[i])
+  arm.sig <- paste0("ARM_", sig.name, sep="")
+  
+  if (i == 1) {
+    tpm_annotated_scores <- tpm_annotated %>% mutate(!!sym(sig.name) := rowMeans(dplyr::select(., !!!syms(gene.sig))))
+  } else {
+    tpm_annotated_scores <- tpm_annotated_scores %>% mutate(!!sym(sig.name) := rowMeans(dplyr::select(., !!!syms(gene.sig))))
+  }
+    # calculate median score and annotate with high or low
+    score.median <- tpm_annotated_scores %>% summarise(median = median(!!sym(sig.name))) %>% as.numeric()
+    sig.name.hl <- paste0(sig.name, ".hl")
+    tpm_annotated_scores <- tpm_annotated_scores %>% mutate(!!sym(sig.name.hl) := ifelse(!!sym(sig.name) >= score.median, "high", "low"))
+    
+    # add ARM x signature
+    tpm_annotated_scores <- tpm_annotated_scores %>% mutate(!!sym(arm.sig) := paste(`ACTARM.2`, !!sym(sig.name.hl), sep = " "))
+    
+} 
+
+# add individual genes
+individual.genes <- c("BATF3", "CD8A")
+
+for (i in 1:length(individual.genes)) {
+  sig.name <- individual.genes[i]
+  arm.sig <- paste0("ARM_", sig.name, sep="")
+    # calculate median score and annotate with high or low
+    score.median <- tpm_annotated_scores %>% summarise(median = median(!!sym(sig.name))) %>% as.numeric()
+    sig.name.hl <- paste0(sig.name, ".hl")
+    tpm_annotated_scores <- tpm_annotated_scores %>% mutate(!!sym(sig.name.hl) := ifelse(!!sym(sig.name) >= score.median, "high", "low"))
+    
+    # add ARM x signature
+    tpm_annotated_scores <- tpm_annotated_scores %>% mutate(!!sym(arm.sig) := paste(`ACTARM.2`, !!sym(sig.name.hl), sep = " "))
+} 
+ 
+# add ORR
+tpm_annotated_scores <- tpm_annotated_scores %>% mutate(ORR_CRPR_SDPD = ifelse(`Response:BCOR` == "CR" | `Response:BCOR` == "PR", "CRPR", "SDPD"))
+
+# add ORR2
+tpm_annotated_scores <- tpm_annotated_scores %>% mutate(ORR_CRPRSD_PD = ifelse(`Response:BCOR` == "PD", "PD", "CRPRSD"))
+
+# remove two patients with NA for response data
+tpm_annotated_scores <- tpm_annotated_scores %>% filter(!is.na(ORR_CRPR_SDPD))
+```
+
+
+# Figure plotting
+
+## Set parameters of KM plots
+```{r}
+# default is analyze all groups
+PA.off <- FALSE
+km.labels <- c("P+A high", "P+A low", "T+A high", "T+A low")
+km.palette <- "npg"
+```
+
+
+## Figure 2E and S1M (association of DC signatures with OS by treatment arm)
+```{r}
+OS.surv.temp <- OSbySig(c("FCGR_DC", "BATF3", "CD8A"))
+ggsave("OS_FCGR_sig_and_selected_genes.png", plot=OS.surv.temp, height=5, width=15, units="in", dpi=150)
+```
+
+
+## Forest plots and OS HR for Fig 2E and S1M
+```{r}
+# need signature high and low, then for each high/low, compare tira+atezo vs atezo
+# generate custom table for input into forestploter
+
+# for DC signature first
+OS.HR.high.list <- list()
+OS.HR.low.list <- list()
+
+dc_genes <- c("FCGR_DC", "BATF3", "CD8A")
+
+for (k in 1:length(dc_genes)) {
+  # gene.sig <- human.genes.from.mouse.sig.intersect[[k]]
+  sig.name <- dc_genes[k]
+  sig.name.hl <- paste0(dc_genes[k], ".hl", sep="")
+  
+  tpm_annotated_scores_high <- tpm_annotated_scores %>% filter(!!sym(sig.name.hl) == "high")
+  tpm_annotated_scores_low <- tpm_annotated_scores %>% filter(!!sym(sig.name.hl) == "low")
+  
+  # factor to compare tira_atezo vs placebo_atezo
+  tpm_annotated_scores_high$ACTARM.2 <- factor(tpm_annotated_scores_high$ACTARM.2, levels = c("placebo_atezo", "tira_atezo"))
+  tpm_annotated_scores_low$ACTARM.2 <- factor(tpm_annotated_scores_low$ACTARM.2, levels = c("placebo_atezo", "tira_atezo"))
+  
+  # build survival model (need to extract some parameters for later)
+  surv.high <- survfit(Surv(OS_MONTHS, OS_CENSOR) ~ ACTARM.2, data = tpm_annotated_scores_high)
+  surv.low <- survfit(Surv(OS_MONTHS, OS_CENSOR) ~ ACTARM.2, data = tpm_annotated_scores_low)
+  
+  pa.high.n <- surv.high$n[1]
+  ta.high.n <- surv.high$n[2]
+  pa.low.n <- surv.low$n[1]
+  ta.low.n <- surv.low$n[2]
+  
+  # calculate coxph
+  OS.HR.sig.high <- coxph( Surv(OS_MONTHS, OS_CENSOR) ~ ACTARM.2, data = tpm_annotated_scores_high)
+  OS.HR.sig.low <- coxph( Surv(OS_MONTHS, OS_CENSOR) ~ ACTARM.2, data = tpm_annotated_scores_low)
+  
+  # get SE for forest plot
+  sig.high.se <- summary(OS.HR.sig.high)$coefficients[,'se(coef)']
+  sig.low.se <- summary(OS.HR.sig.low)$coefficients[,'se(coef)']
+  
+  # convert to df
+  OS.HR.sig.high.df <- cox_as_data_frame(OS.HR.sig.high) %>% mutate(gene.sig = paste(sig.name), sig.hl = "high", gene.sig.hl = paste(sig.name, "high"), n_PA = pa.high.n, n_TA = ta.high.n, se = sig.high.se)
+  OS.HR.sig.low.df <- cox_as_data_frame(OS.HR.sig.low) %>% mutate(gene.sig = paste(sig.name), sig.hl = "low", gene.sig.hl = paste(sig.name, "low"), n_PA = pa.low.n, n_TA = ta.low.n, se = sig.low.se)
+  
+  # add to list of dataframes
+  OS.HR.high.list[[k]] <- OS.HR.sig.high.df
+  OS.HR.low.list[[k]] <- OS.HR.sig.low.df
+
+}
+
+# combine df
+OS.HR.high.sig.df <- Reduce(full_join, OS.HR.high.list)
+OS.HR.low.sig.df <- Reduce(full_join, OS.HR.low.list)
+
+OS.HR.all.sig.df <- rbind(OS.HR.high.sig.df, OS.HR.low.sig.df)
+
+
+# extract columns for forest
+OS.sig.forest.df <- OS.HR.all.sig.df %>% select(gene.sig, sig.hl, n_PA, n_TA, HR, Lower_CI, Upper_CI, se, p)
+
+# create empty rows with only signature name header
+temp.sig.NA <- data.frame(gene.sig = dc_genes, sig.hl = rep(NA, length(dc_genes)), n_PA = rep(NA, length(dc_genes)),
+                          n_TA = rep(NA, length(dc_genes)), HR = rep(NA, length(dc_genes)), Lower_CI = rep(NA, length(dc_genes)), Upper_CI = rep(NA, length(dc_genes)), se = rep(NA, length(dc_genes)), p = rep(NA, length(dc_genes)))
+
+# add row headers to forest df
+OS.sig.forest.df <- rbind(OS.sig.forest.df, temp.sig.NA)
+# OS.sig.forest.df <- OS.sig.forest.df %>% arrange(gene.sig)
+
+# re-order so that we have row header, then low, the high for gene sig
+xy <- OS.sig.forest.df %>% arrange(match(gene.sig, dc_genes), !is.na(sig.hl), desc(sig.hl)) %>% mutate(Signature = coalesce(sig.hl, gene.sig))
+xy$Signature <- ifelse(is.na(xy$n_PA), xy$Signature, paste0("    ", xy$Signature))
+xy$` ` <- paste(rep(" ", 20), collapse = " ")
+xy$`HR (95% CI)` <- ifelse(is.na(xy$se), "", sprintf("%.2f (%.2f \u2013 %.2f)",
+                                     xy$HR, xy$Lower_CI, xy$Upper_CI))
+xy.clean <- xy %>% select(Signature, n_TA, n_PA, HR, Lower_CI, Upper_CI, se, ` `, `HR (95% CI)`, p) %>% 
+  mutate(n_PA = ifelse(is.na(n_PA), "", n_PA), n_TA = ifelse(is.na(n_TA), "", n_TA)) %>% 
+  rename("tira+atezo" = "n_TA", "atezo" = "n_PA") %>% mutate(p = round(p, 3)) %>% mutate(p = ifelse(is.na(p), "", p))
+
+fp1 <- forest(xy.clean[,c(1:3, 8:10)],
+            est = xy.clean$HR,
+            lower = xy.clean$Lower_CI, 
+            upper = xy.clean$Upper_CI,
+            sizes = xy.clean$se,
+            ci_column = 4,
+            ref_line = 1,
+            arrow_lab = c("T+A Better", "P+A Better"),
+            xlim = c(0, 4),
+            ticks_at = c(0.5, 1, 2, 3),
+            footnote = "Univariate analysis for coxph")
+
+print(fp1)
+```
+

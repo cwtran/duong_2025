@@ -1,5 +1,5 @@
 # Duong et al. (2025)
-This repository contains R code used to generate Fig 2E and S1M presented in Duong et al. (2025). [https://doi.org/xyz](link to article to be added when available)
+This repository contains R code used to generate Fig 2E and S1M presented in Duong et al. (2025). (link to article to be added when available)
 
 Human sequencing data is available at: https://ega-archive.org/studies/EGAS50000000251 You will need to accept the terms and request access to download these data. Please note that these sequencing data were originally published as part of Guan X et al. Anti-TIGIT antibody improves PD-L1 blockade through myeloid and Treg cells. _Nature_. 2024 Mar;627(8004):646-655. Epub 2024 Feb 28. [https://doi.org/10.1038/s41586-024-07121-9](https://doi.org/10.1038/s41586-024-07121-9). PMCID: [PMC11139643](https://www.ncbi.nlm.nih.gov/pmc/articles/PMC11139643/).
 
